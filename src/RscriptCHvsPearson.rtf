@@ -1,0 +1,198 @@
+#
+# 
+#
+# 9/30/23 Generic R script for implementing Bougnol&Dula Recommender Problem with Convex Hulls (CH)  and Linear 
+# Programming (LP) to generate predictions for nUsers.
+# The script will also generate the user/item predictions using Pearson’s correlations
+#
+# Input: the utility matrix with nItems  rows for the items (e.g. Movies, Jokes, Artists, etc.) and nUsers columns with the users (or the transpose). 
+# Note: we assume the matrixes have column headings and row labels. 
+# Note: the matrix may have been stored as its transpose in an Excel file. In this case store in utilMtxT. 
+# Note: The order of the items should be shuffled.
+# Output: Two matrixes, PredictPearsonAll and PredictCHullsAll, with dimension (nUsers X nItems) containing the predicted ratings for the items in the “validation” (or “test”) submatrix: one using Pearson’s correlations  and the other using convex hulls and LPs.
+#
+# Parameters: (R variable in blue)
+#	Number of Users: nUsers
+#	Number of Items: nItems
+#	Number of items in the training set: nTrain  (< nItems)
+#
+# Utility and other matrixes:
+#	utilMtx: utility matrix with dimension nItems X nUsers.
+#	utilMtxT: Transpose of utility matrix (dimension: nUsers  X nItems). Necessary is Excel’s problems with column limits when nUsers  >> nItems .
+#	trainMtx: Training set with dimension nTrain X nUsers
+#	
+# ToC
+# Part 1: Prepare the environment (working directory, load packages,  etc.).
+# Part 2:  Load utilMtx  (or  utilMtxT) from an Excel file worksheet.
+# Part 3: Extract training submatrix (trainMtx) with dimension nTrain X nUsers.
+# Part 4: Create the matrix, AllPearsCorr, of all Pearson’s correlations using trainMtx.
+# Part 5: Create the matrix, AllLPsols, with the LP solutions for each user with convex hulls and LPs using trainMtx.
+# Part 6: Generate the predictions on the validations (“test”) data using the trained models one with Pearson’s and the other with Convex Hulls.
+
+
+
+# Part 1: Prepare the environment
+# Step 1: Change working directory to the location of the utility matrix in the form of Items as rows and users as columns: in OSX: Use “Misc” tab. The script assumes the data is in an Excel sheet and has column headings and row labels.
+# Step 2: Load the required libraries: Use Package Installer in tab “Packages & Data”: gdata() to read Excel worksheet containing the utility matrix, and lpSolve().
+# 
+# Part 2: Load the utility matrix from a worksheet in an Excel file (make sure =gdata() is loaded (use “=library(gdata)” to check)
+#
+# Set names of the Excel file and the worksheet
+#
+> fileName = "CrowdFlower100X893.xlsx" #Name of Excel file containing the utility matrix.
+> sheetName = "Top100Tracks100X893"   #Name of Worksheet in the Excel file.
+> utilMtx = read.xls(fileName, sheet=sheetName, header=TRUE, row.names=1) #Data set has columns headings and row labels.
+
+#
+# Keep the transpose of the utility matrix since it will be used in a couple of places
+#
+> utilMtxT=t(utilMtx)
+
+#
+# Place dimensions of utility matrix into variables nUsers & nItems:
+#
+> utilMtxDim=dim(utilMtx)
+> nItems=utilMtxDim[1]
+> nUsers=utilMtxDim[2]
+#
+# Part 3: Extract training set from the utility matrix.
+#
+#
+# Set cardinality of training set, nTrain, using a strict subset of nItems:
+# Assume use the first nTrain items
+#
+>nTrain=floor(nItems/2) #Must be an integer! or
+>nTrain=???
+>trainMtx=utilMtx[1:nTrain,] #Extract nTrain rows (items; assuming items in full utility matrix have been shuffled).
+
+#
+#
+Part 4: Create the matrix of all Pearson’s correlations.
+#
+#
+> AllPearsCorr <- cor(trainMtx, trainMtx, method="pearson")  # Read response to warning about zero std. dev.
+#
+# If …
+# Warning message: In cor(trainMtx, trainMtx,  : the standard deviation is zero.
+# 
+# This warning means that there are duplicate users (columns with dimension nTrain) in the training set (usually because all zeroes). 
+# Remove duplicate users. If problem persist, look for duplicate non-zero columns.
+# Problem may be solved if the users (rows) in the full utility matrix, utilMtx, are reshuffled (since we are extracting a subset for training). 
+# This problem must be resolved otherwise the process will fail.
+#
+# Pearson’s correlations with timer (single-line command):
+#
+> start_time <- Sys.time();  
+AllPearsCorr <- cor(trainMtx, trainMtx, method="pearson");
+end_time <- Sys.time();
+Pearsontime=end_time - start_time; Pearsontime
+Time difference of ??? secs
+
+Part 5: Find neighbors using convex hulls with LPs. Use lpSolve()
+> require(lpSolve)
+Loading required package: lpSolve
+> library(lpSolve)
+#
+# Translate the data in preparation for gauge LP.
+# Recall that the data is translated so the barycenter becomes the origin.
+# 
+> TranslateDataForLP = t(apply(trainMtx, 1, scale, scale=FALSE, center=TRUE))
+
+#
+# Prepare the variables used in lpSolve(): OF coefficients and sense of the constraints.
+#
+> rp3.obj = rep(1, nUsers)		#LPs’ Objective Function coefficients are all 1s; 
+> rp3.dir = rep("=", nTrain)   # nTrain constraints are equalities.
+#
+# Initialize matrix where BFSs for all users using the items in the training set will be dumped.
+# Each of the nUsers will have nTrain neighbors because each BFS has nTrain basic variables.
+# These are the extreme points of the projected facet; i.e., convex hull neighbors.
+# They will be compared with those using Pearson’s correlation (in variable “AllPearsCorr”).
+#
+> LPsolTrainSet=matrix(rep(0,nUsers* nUsers),nrow= nUsers,ncol= nUsers) # Initialize matrix where values for the nTrain basic variables are dumped.
+#
+# Run the nUsers LPs with timer
+#
+>  start_time <- Sys.time();  
+for (j in 1:nUsers){lpOUT = lp ("min", rp3.obj[-j], TranslateDataForLP[,-j], rp3.dir, TranslateDataForLP[,j]); temp<- t(lpOUT$solution); temp=append(temp, -1.0*lpOUT$objval, after=(j-1)); LPsolTrainSet[ ,j]<-temp}; 
+end_time <- Sys.time()
+> LPtime=end_time - start_time; LPtime
+Time difference of 52.47267 secs.  #1st trial for Yahoo!Artists data (50 X 1235)
+Time difference of 53.05836 secs. #2nd trial for Yahoo!Artists
+Time difference of 31.31271 secs  MovieLens
+Time difference of 13.19595 secs for #1st CrowdFlower
+Time difference of 13.65908 secs for #2nd trial CrowdFlower
+
+#
+# Part 6: Predictions on the test data using the trained model:
+# Step 1: Create the matrix of averges needed to make predictions. Req’d in Expression (2.3) in JannachZankerFelfernigFriedrich11 
+# Step 2. Using the  Pearson’s correlations.
+# Step 3. Using the Convex Hulls.
+#
+
+#
+#
+# Step 1: Create the vector AVGS with the averages of each user’s ratings for the 64 jokes 
+# in the training set. (Req’d in Expression (2.3) in JannachZankerFelfernigFriedrich11)
+#
+#
+# Move the data frame (which has annoying row and columns names) to a temporary file
+# so we can perform some numerical operations e.g. averages.
+#
+>rm(temp)      # start with a new temp matrix.
+>temp=as.matrix(t(trainMtx))   # Removes row names.
+> dimnames(temp) <- NULL            # Removes column names.
+
+#
+#
+#
+> AVGS=rowMeans(temp[])    # The vector of averages
+
+#
+# Calculate predictions for the (nItems-nTrain) items in the test/validation set using Pearson’s.
+# Start by initializing the matrix where the predictions will be placed.
+#
+> PredictPearsonAll=matrix(rep(0,nUsers*(nItems-nTrain)),nrow=nUsers, ncol=(nItems-nTrain))  # Initialize matrix.
+
+#
+# Calculate predictions for the (nItems-nTrain) Artists in the test/validation set using formula Expression (2.3) in JannachZankerFelfernigFriedrich11. 
+# Note: the formula uses neighbors based on the correlation “proximity”; i.e., the nTrain most correlated users.
+#
+> for(i in 1:(nItems-nTrain)){for (j in 1:nUsers){PredictPearsonAll[j,i]= AVGS[j]+(AllPearsCorr[order(AllPearsCorr[,j],decreasing=T)[2:(nItems-nTrain)+1],j]%*%(utilMtxT[order(AllPearsCorr[,j],decreasing=T)[2:(nItems-nTrain)+1],i+(nItems-nTrain)]-AVGS[order(AllPearsCorr[,j],decreasing=T)[2:(nItems-nTrain)+1]]))/sum(AllPearsCorr[order(AllPearsCorr[,j],decreasing=T)[2:(nItems-nTrain)+1],j])}};
+
+#
+# Same instruction with timer
+#
+start_time <- Sys.time(); 
+for(i in 1:(nItems-nTrain)){for (j in 1:nUsers){PredictPearsonAll[j,i]= AVGS[j]+(AllPearsCorr[order(AllPearsCorr[,j],decreasing=T)[2:(nItems-nTrain)+1],j]%*%(utilMtxT[order(AllPearsCorr[,j],decreasing=T)[2:(nItems-nTrain)+1],i+(nTrain)]-AVGS[order(AllPearsCorr[,j],decreasing=T)[2:(nItems-nTrain)+1]]))/sum(AllPearsCorr[order(AllPearsCorr[,j],decreasing=T)[2:(nItems-nTrain)+1],j])}}; end_time <- Sys.time(); CorrPredictTime=end_time - start_time;  CorrPredictTime
+Time difference of 15.70805 secs		#For the Yahoo!Artists data set (50X1235).
+Time difference of 10.22912 secs    #For the CrowdFlower data set (50X893).
+Time difference of 10.0142 secs	#For the CrowdFlower data set (50X893).
+Time difference of 1.662975 mins #For the Jester data set (64X2911)
+
+#
+# Generate the predictions for the remaining (nItems-nTrain) “new” items in the test/validation set
+# using Convex Hulls
+# Start by initializing the matrix where the predictions will be put.
+#
+
+> PredictCHullsAll=matrix(rep(0,nUsers*(nItems-nTrain)),nrow=nUsers, ncol=(nItems-nTrain))
+#
+# Calculate predictions using formula Expression (2.3) in JannachZankerFelfernigFriedrich11. 
+# Note: the formula uses neighbors based on the extreme points of the nearest projecting facet of the convex of the users’ data.
+#
+
+> for(i in 1:(nItems-nTrain)){for (j in 1:nUsers){PredictCHullsAll[j,i]=AVGS[j]+(LPsolTrainSet[-j,j]%*%(utilMtxT[-j,i+nTrain]-AVGS[-j]))/(-1*LPsolTrainSet[j,j])}}
+
+#
+# Same instruction with timer
+# 
+>start_time <- Sys.time(); for(i in 1:(nItems-nTrain)){for (j in 1:nUsers){PredictCHullsAll[j,i]=AVGS[j]+(LPsolTrainSet[-j,j]%*%(utilMtxT[-j,i+nTrain]-AVGS[-j]))/(-1*LPsolTrainSet[j,j])}};end_time <- Sys.time(); ConvexHullPredictTime=end_time - start_time; ConvexHullPredictTime
+Time difference of 10.72478 mins MovieLens data set.
+Time difference of 10.82157 mins MovieLens data set.
+#
+# Write the predictions using convex hulls into file "PredictCHullsAll.csv"
+# PredictCHullsAll
+#
+
+> write.csv(PredictPearsonAll,"PredictPearsonAll.csv")
